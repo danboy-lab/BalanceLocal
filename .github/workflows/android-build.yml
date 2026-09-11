@@ -8,6 +8,7 @@ on:
 
 env:
   ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+  GRADLE_HOME: ${{ runner.temp }}/gradle
 
 jobs:
   build:
@@ -36,19 +37,36 @@ jobs:
           mv cmdline/cmdline-tools/* cmdline-tools/latest/ || true
           yes | cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      - name: Download Gradle 8.6 (fallback)
+        run: |
+          mkdir -p $GRADLE_HOME
+          cd $GRADLE_HOME
+          wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip -O gradle.zip
+          unzip -q gradle.zip
+          echo "Added gradle to ${GRADLE_HOME}"
+        shell: bash
+
+      - name: Add Gradle to PATH
+        run: |
+          echo "${{ runner.temp }}/gradle/gradle-8.6/bin" >> $GITHUB_PATH
+
+      - name: Make gradlew executable (if present)
+        run: |
+          if [ -f ./gradlew ]; then chmod +x ./gradlew; fi
 
       - name: Build Debug APK
-        uses: gradle/gradle-build-action@v2
-        with:
-          gradle-version: '8.6'
-          arguments: 'assembleDebug'
+        run: |
+          set -e
+          # Try wrapper first, fallback to downloaded Gradle if wrapper fails
+          if [ -f ./gradlew ]; then
+            ./gradlew assembleDebug --no-daemon -Pandroid.sdk.path=$ANDROID_SDK_ROOT || (
+              echo "gradlew failed, falling back to downloaded gradle" && $GRADLE_HOME/gradle-8.6/bin/gradle assembleDebug --no-daemon -Pandroid.sdk.path=$ANDROID_SDK_ROOT
+            )
+          else
+            $GRADLE_HOME/gradle-8.6/bin/gradle assembleDebug --no-daemon -Pandroid.sdk.path=$ANDROID_SDK_ROOT
+          fi
+        env:
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -57,10 +75,17 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Build Release APK (unsigned)
-        uses: gradle/gradle-build-action@v2
-        with:
-          gradle-version: '8.6'
-          arguments: 'assembleRelease'
+        run: |
+          set -e
+          if [ -f ./gradlew ]; then
+            ./gradlew assembleRelease --no-daemon -Pandroid.sdk.path=$ANDROID_SDK_ROOT || (
+              echo "gradlew failed, falling back to downloaded gradle" && $GRADLE_HOME/gradle-8.6/bin/gradle assembleRelease --no-daemon -Pandroid.sdk.path=$ANDROID_SDK_ROOT
+            )
+          else
+            $GRADLE_HOME/gradle-8.6/bin/gradle assembleRelease --no-daemon -Pandroid.sdk.path=$ANDROID_SDK_ROOT
+          fi
+        env:
+          ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
 
       - name: Upload release APK (unsigned)
         uses: actions/upload-artifact@v4
